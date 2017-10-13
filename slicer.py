@@ -14,16 +14,17 @@ def main():
     #create object representing part to work with
     part1 = part(stlFile,layerHeight)
 
+    print('Done! Drawing now')
     #for each facet in part check intercept with z value
     scale = np.concatenate((np.array([0,0,0]),part1.maximums),0)
     lines=[] #list of lines to be used in drawing thi slice
-    z=0
-    for level in part1.perimeter:
-        i=0
-        for loop in level:
-            lines.extend(loop.getLines)
-        z=z+1
-    print('Done! Drawnig now')
+    for level in part1.perimeters:
+        for loop in part1.perimeters[level]:
+            i=0
+            for point in loop:
+                if i!=0:
+                    lines.append(line(loop[i-1],loop[i]))
+                i=i+1
     drawLines(lines,scale)
 
 def drawLines(lines,scale):
@@ -46,7 +47,8 @@ class part:
         self.model = mesh.Mesh.from_file(filepath)
         self.file = filepath
         self.layerHeight = layerHeight
-
+        self.perimeters={} #dictionary to hold perimeters (as a list of lists of points for each height)
+        
         #loop through mesh object and create facets
         i = 0 #index for accessing arrays
         self.facets = [] #empty list to contain facets
@@ -64,8 +66,11 @@ class part:
     def generatePerimeters(self,newLayerHeight=9999):
         if newLayerHeight!=9999:self.layerHeight=newLayerHeight
         z=0
-        #reset permineters
-        self.createpIndex()
+        #reset permineters0
+        self.perimeters={}
+        while z<=self.maximums[2]:
+            z=z+self.layerHeight
+            self.perimeters[z]=[]
 
         for fac in self.facets:
             z=divmod(fac.minZ,self.layerHeight)[0]
@@ -73,58 +78,46 @@ class part:
             while z <= fac.maxZ:
                 inter = fac.zintersect(z)
                 if inter !=0:
-                    if self.perimeter[self.pIndex(z)]==[]:
-                        addtoLoops(z,inter)
+                    self.addtoLoops(z,inter)
                 z=z+self.layerHeight
 
-    def addtoLoops(z,line):
+    def addtoLoops(self,z,line):
         totAdded=0
         i=0
         loop1=0
         loop2=0
-        for loops in self.perimeter[self.pIndex(z)]:
-            added = loops.addLine(line)
+        for loop in self.perimeters[z]:
+            added=0
+            #only add if loop is not complete
+            if np.array_equal(loop[0],loop[-1])==False:
+            #add to beginning if line is at beginning of incomplete loop
+                if np.array_equal(loop[0],line[1]):
+                    loop.insert(0,line[0])
+                    added=1
+            #add to end if line is at end of incomplete loop
+                elif np.array_equal(loop[-1],line[0]):
+                    loop.append(line[1])
+                    added=1
+            #store index of loops line is added to
             if added == 1 and loop1==0:
                 loop1=i
             elif added==1:
                 loop2=i
             i=i+1
-
+        
+        #if not added then add it as a new loop
         if loop1==0:
-            start=point(None,line.start,None)
-            end=point(start,line.end,None)
-            start.following=end
-            newLoop=loop(start,end)
-            self.perimeter[self.pIndex(z)].append(newLoop)
+            self.perimeters[z].append(line)
+        #else if added to 2 then merge loops and remove the excess
         elif loop2!=0:
-            L1 = self.perimeter[self.pIndex(z)][loop1]
-            L2 = self.perimeter[self.pIndex(z)][loop2]
-            if L1.startPoint.coord == line.start:
-                L1.startPoint = L1.startPoint.following
-                L1.startPoint.previous = L2.endPoint
-                L2.endPoint.following = L1.startPoint
-                L1.startPoint = L2.startPoint
-                self.perimeter[self.pIndex(2)][loop1]=L1
+            #if line is from L2 to L1 then insert L1 after L
+            if np.array_equal(self.perimeters[z][loop1][0],line[0]):
+                self.perimeters[z][loop2].extend(self.perimeters[z][loop1][2:])
+                del self.perimeters[z][loop1]
             else:
-                L1.endPoint = L1.previous
-                L1.endPoint.following = L2.startPoint
-                L2.startPoint.previous = L1.endPoint
-                L1.endPoint = L2.endPoint
-                self.perimeter[self.pIndex(z)][loop1] = L1
+                self.perimeters[z][loop1].extend(self.perimeters[z][loop2][2:])
+                del self.perimeters[z][loop2]
 
-            self.perimeter[self.pIndex(z)].remove(L2)
-            print(i)
-
-
-
-    def createpIndex(self):
-        z=0
-        self.pIndex=[]
-        self.perimeter=[]
-        while z<= self.maximums[2]:
-            z=z+self.layerHeight
-            self.pIndex.append(z)
-            self.perimeter.append([])
 
 class point:
     def __init__(self,previous=None,coord=None,following=None):
@@ -132,33 +125,7 @@ class point:
         self.coord = coord
         self.following=following
 
-class loop:
-    def __init__(self,startPoint,endPoint):
-        self.startPoint=startPoint
-        self.endPoint=endPoint
-
-    def addLine(self,line):
-        added=0
-        #check loop complete
-        if self.startPoint==self.endPoint:
-            return added
-        #check if line is at beginning of incomplete loop
-        if np.array_equal(self.startPoint.coord,line.end):
-            start = point(None,line.start,self.startPoint)
-            self.startPoint=start
-            added=1
-        #check if line is at end of incomplete loop
-        if np.array_equal(self.endPoint.coord,line.start):
-            end = point(self.endPoint,line.end,None)
-            self.endPoint=end
-            added=1
-        #check if line has completed loop and tie off if so
-        if np.array_equal(self.startPoint.coord,self.endPoint.coord):
-            self.startPoint.previous=self.endPoint
-            self.endPoint.following=self.startPoint
-            self.endPoint=self.startPoint
-        return added
-#class to define a line/edge
+        #class to define a line/edge
 class line:
     def __init__(self,start,end):
         self.start = start
@@ -193,8 +160,8 @@ class facet:
         if crossed == 1:
             intersect=line(points[0],points[1])
             if (intersect.unitNorm[0]>0 and self.flatUnitNorm[0] <0) or (intersect.unitNorm[0] <0 and self.flatUnitNorm[0] >0):
-                intersect=line(points[1],points[0])
-            return intersect
+                points.reverse()
+            return points
         else:
             return 0
 
